@@ -7,3 +7,5 @@ Data science challenge from Kaggle on NYC yellow cabs dataset
 **II.** What are the most popular pick up/drop off areas in NY? What are the most popular journeys?
 
 **III.** Identify any outliers in the daily volumes of cab rides. Can you provide a reason for the largest outlier?
+
+https://htmlpreview.github.io/?https://github.com/Eddoha55/NYC-Taxi-Kaggle/blob/master/NYC-DS.html
