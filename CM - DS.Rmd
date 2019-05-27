@@ -1,0 +1,1156 @@
+---
+title: "NYC Taxi - Data Science Challenge"
+author: "Eddy OHAYON"
+output: html_document
+---
+
+---
+title: "NYC Taxi - Data Science Challenge"
+author: "Eddy OHAYON"
+output: html_document
+---
+
+## Tasks
+**I.** Perform an initial inspection of the cab ride dataset and do any data cleaning necessary to make your analysis more successful.
+
+**II.** What are the most popular pick up/drop off areas in NY? What are the most popular journeys?
+
+**III.** Identify any outliers in the daily volumes of cab rides. Can you provide a reason for the largest outlier?
+
+
+## Loading Librairies
+```{r message=FALSE, warning=FALSE, results='hide'}
+
+# Data reading
+library(readr)
+
+# Data manipulation
+library(dplyr) 
+library(data.table)
+library(tibble)
+library(tidyr) 
+library(stringr)
+library(forcats)
+
+# Data Visualisation
+library(ggplot2)
+library(scales)
+library(RColorBrewer) 
+
+# Date & Time
+library(lubridate)
+
+# Geospatial locations & Maps
+library(geosphere) 
+library(leaflet)
+library(leaflet.extras)
+library(maps)
+library(htmltools)
+
+# Weather
+library(weathermetrics)
+```
+
+# I. Data inspection and cleaning
+
+## I.1 Structure and overview
+
+```{r message=FALSE, warning=FALSE, results="hide"}
+cabs <- read_csv("cab_data.csv") # read the data
+```
+
+Let's have a first overview of the data structure and the variables.
+```{r echo=TRUE}
+head(cabs)
+```
+
+### Data dictionary & description
+
+This dataset contains a sample of yellow cab rides taken in NY from the 1st of January 2016 to the 30th of June 2016 (6 months).
+
+### Data fields
+**id** - a unique identifier for each journey
+
+**vendor_id** - a code indicating the provider associated with the trip record
+
+**pickup_datetime** - date and time when the journey started
+
+**dropoff_datetime** - date and time when the journey completed
+
+**passenger_count** - the number of passengers in the vehicle (driver entered value)
+
+**pickup_longitude** - the longitude where the journey started
+
+**pickup_latitude** - the latitude where the journey started
+
+**dropoff_longitude** - the longitude where the journey completed
+
+**dropoff_latitude** - the latitude where the journey completed
+
+**store_and_fwd_flag** - This flag indicates whether the trip record was held in vehicle memory before sending to the 
+vendor becausethe vehicle did not have a connection to the server - Y=store and forward; N=not a store and forward 
+trip
+
+**trip_duration** - duration of the trip in seconds
+
+Let's check some keys figures and stats of the data using summary and glimpse
+
+```{r}
+summary(cabs)
+glimpse(cabs)
+```
+
+We see that :
+
+The dataset has a total of **1,458,644 observations and 11 variables**.
+
+**vendor_id** has two values (1 or 2), probably two different taxi companies operating in NYC.
+
+**pickup_datetime** and **dropoff_datetime** is in combination format of date and time (to reshape later on).
+
+**passenger_count** : the median value indicates that at least 50% of the journeys were made with only one passanger and at least 75% of them with 2 passengers maximum. The maximum is 9 passengers which a lot people inside a car! We'll check theses values in the cleaning part.
+
+**longitude & latitude** for both pickup and dropoff have extreme values which are very unlikely to be in NYC. To identify during the cleaning part as well!
+
+**trip_duration**: Some very quick trips (1sec) and extremely long ones (~41 days). To investigate in the cleaning part! We can also notice through the 3rd quartile that at least 75% of the trips lasted less than 17 minutes.
+
+## I.2 Missing values or duplicate journeys
+
+```{r}
+# Check potential missing values
+sum(is.na(cabs))
+```
+We are lucky! The data is complete without any missing values.
+
+```{r}
+# Check if there are no duplicate journey through id
+length(unique(cabs$id))
+```
+No duplicate as well.
+
+## I.3 Reformate features
+
+We will reformate the pickup and dropoff time as date object. We also put the vendor_id and passenger count as factor in order to make it easier to visualise relationships that involve these features.
+
+```{r results='hide'}
+cabs <- cabs %>% mutate(vendor_id = factor(vendor_id), # as factor
+         passenger_count = factor(passenger_count), # as factor as well
+        pickup_datetime = ymd_hms(pickup_datetime), # date object
+         dropoff_datetime = ymd_hms(dropoff_datetime)) # date object
+        
+```
+
+## I.4 Finding outliers & cleaning
+
+### I.4.a Longitude & Latitude
+
+As our analysis is focused on NYC, we will get rids of all the trips who were not in the NYC area. To do so, we will remoove them by taking into account the Bouding Box of New-York (found here https://www.flickr.com/places/info/2459115).
+
+
+```{r results="hide"}
+# Keeping the trips in the NYC area
+# NYC Bounding Box: -74,2589, 40,4774, -73,7004, 40,9176
+cabs = cabs %>% filter(pickup_longitude >= -74.2589 & pickup_longitude <= -73.7004 & 
+                       dropoff_longitude >= -74.2589 & dropoff_longitude <= -73.7004 & 
+                       pickup_latitude <= 40.9176 & pickup_latitude >= 40.4774 & 
+                       dropoff_latitude <= 40.9176 & dropoff_latitude >= 40.4774)
+```
+
+```{r}
+nyc_map = leaflet() %>%
+    addTiles() %>%
+    addRectangles(lat1 = 40.9176, lng1 = -74.2589, lat2 = 40.4774, lng2 = -73.7004)
+nyc_map
+```
+Above we can see in the blue rectangle the zone we kept for our analysis.
+
+### I.4.b Trips duration
+
+We saw in the summary that some trips duration are extremely short or long. Let's investigate with visualizations.
+```{r}
+cabs %>%
+  ggplot(aes(trip_duration)) +
+  geom_histogram(fill = "blue", bins = 200) +
+  scale_x_log10() +
+  scale_y_sqrt()
+```
+*Note: logarithmic x-axis and square-root y-axis alows to visualize the graph properly.*
+
+We see that :
+
+- Strange short rides during less than 10 seconds.
+
+- Strange small peak of very long trip duration and extreme outliers.
+
+- Still, rides follow a rather smooth distribution.
+
+#### Very long trips investigation
+
+Let's have a closer look at the extremely long trips :
+
+```{r}
+cabs %>%
+  arrange(desc(trip_duration)) %>% head(10)
+```
+
+There are 4 trips who lasted 22 days or more up to 41 and numerous trips who lasted around 24 hours! Some of them have strange date time for pickup and dropoff time being both at OO:OO:OO (id0953667).
+I did not thought traffic jam was that bad in NYC!
+
+Let's put on a map the trips which lasted more than 24 hours :
+```{r}
+xtrm_long_trips = cabs %>% filter(trip_duration>24*3600) # data with more than 24 hours trips
+
+xtrm_map = leaflet(data = xtrm_long_trips) %>% addProviderTiles(providers$CartoDB.Positron) %>%
+  addCircleMarkers(~ pickup_longitude, ~pickup_latitude, radius = 4,
+                   color = "green", fillOpacity = 0.3,
+                   label =~as.character(paste(id,";",
+                                              "duration (min):",round(trip_duration/60,0)))) %>%
+  addCircleMarkers(~ dropoff_longitude, ~dropoff_latitude, radius = 4,
+                   color = "orange", fillOpacity = 0.3,
+                   label =~as.character(paste(id,";",
+                                              "duration (min):",round(trip_duration/60,0))))
+for(i in 1:nrow(xtrm_long_trips)){
+    xtrm_map <- addPolylines(xtrm_map, lat = as.numeric(xtrm_long_trips[i, c(7, 9)]), 
+                               lng = as.numeric(xtrm_long_trips[i, c(6, 8)]))
+} # adding the connection betweek each pickup and dropoff
+xtrm_map # map with green points as pickup location, orange points as dropoff and the link between them 
+```
+
+Seems normal trips with 2 of them from JFK Aiport and the others in or close to Manhattan. Still, it's very strange to stay that long in a taxi for rather short trips even with good music...
+
+As they are very likely to be real trips but suffer from a technical issue, we will assigned them the mean duration time as trip duration.
+
+```{r results="hide"}
+cabs = cabs %>%
+    mutate(trip_duration = replace(trip_duration, trip_duration > 24*3600, mean(trip_duration))) # assign these trips the mean
+
+```
+
+We also saw a lot of trips who lasted almost 24 hours. Let's do the same as above to identify them.
+
+```{r}
+day_long_trips = cabs %>% filter(trip_duration > 20*3600) # data with more than 20 hours trips
+
+day_map = leaflet(data = day_long_trips) %>% addProviderTiles(providers$CartoDB.Positron) %>%
+  addCircleMarkers(~ pickup_longitude, ~pickup_latitude, radius = 1,
+                   color = "green", fillOpacity = 0.3) %>%
+  addCircleMarkers(~ dropoff_longitude, ~dropoff_latitude, radius = 1,
+                   color = "orange", fillOpacity = 0.3)
+for(i in 1:nrow(day_long_trips)){
+    day_map <- addPolylines(day_map, lat = as.numeric(day_long_trips[i, c(7, 9)]), 
+                               lng = as.numeric(day_long_trips[i, c(6, 8)]),
+                            color = "blue", weight = 2,opacity = 0.1)
+} # adding the connection betweek each pickup and dropoff
+day_map
+```
+
+The majority of the trips are within Manhattan or in NYC area. Numerous of them are between Manhattan and the airports (to Newark Liberty in the south west, to LaGuardia in the East and to JFK in the south east). We can assume that these trips were real but there was a technical issue as for the ones which lasted several days.
+
+We will assigned them the mean value.
+
+```{r results="hide"}
+cabs = cabs %>%
+    mutate(trip_duration = replace(trip_duration, trip_duration > 20*3600, mean(trip_duration))) # assign these trips the mean
+```
+
+We saw in the summary that at least 75% of trips who lasted less than 17 minutes.
+Nevertheless, there are trips who lasted more than 3, 5 or even +10 hours. Let's have a look at trips who lasted more than 3 hours.
+
+```{r}
+long_trips = cabs %>% filter(trip_duration > 3*3600) # data with more than 20 hours trips
+
+long_map = leaflet(data = long_trips) %>% addProviderTiles(providers$CartoDB.Positron) %>%
+  addCircleMarkers(~ pickup_longitude, ~pickup_latitude, radius = 1,
+                   color = "green", fillOpacity = 0.3, popup ="pickup")%>%
+  addCircleMarkers(~ dropoff_longitude, ~dropoff_latitude, radius = 1,
+                   color = "orange", fillOpacity = 0.3, popup ="dropoff")
+for(i in 1:nrow(long_trips)){
+    long_map <- addPolylines(long_map, lat = as.numeric(long_trips[i, c(7, 9)]), 
+                               lng = as.numeric(long_trips[i, c(6, 8)]),
+                            color = "blue", weight = 2,opacity = 0.1)
+} # adding the connection betweek each pickup and dropoff
+long_map
+```
+
+Same as for the previous ones. Most of them are the journey for JFK or La Guardia. These are real trips but probably a technical error for time duration value. 
+
+It's very unlikely that people spend more than 3 hours in taxi for these kinds of trips. Even for trips with higher distance (Manhattan - JFK) the duration is around 35 min when traffic is fluid according Google Maps. It can increase to +2H with traffic jam. Thus, we will keep the duration of those who lasted less than 3 hours, but assign the mean for those who lasted more than 3 hours.
+
+```{r results="hide"}
+cabs = cabs %>%
+    mutate(trip_duration = replace(trip_duration, trip_duration > 3*3600, mean(trip_duration))) # assign these trips the mean
+```
+
+
+#### Very short trips investigation
+
+They were also very short trips. Let's dig into them by taking the ones who lasted less than 2 minutes :
+
+```{r}
+short_trips <- cabs %>% filter(trip_duration < 2*60)
+short_trips <- sample_n(short_trips, 2000) # sample of around 10% for visualisation and loading purpose
+short_map = leaflet(data = short_trips) %>% addProviderTiles(providers$CartoDB.Positron) %>%
+  addCircleMarkers(~ pickup_longitude, ~pickup_latitude, radius = 1,
+                   color = "green", fillOpacity = 0.3)%>%
+  addCircleMarkers(~ dropoff_longitude, ~dropoff_latitude, radius = 1,
+                   color = "orange", fillOpacity = 0.3)
+for(i in 1:nrow(short_trips)){
+    short_map <- addPolylines(short_map, lat = as.numeric(short_trips[i, c(7, 9)]), 
+                               lng = as.numeric(short_trips[i, c(6, 8)]),
+                            color = "blue", weight = 2,opacity = 0.1)
+} # adding the connection betweek each pickup and dropoff
+short_map
+```
+
+Very short trips may actually happen, we indeed see the connection between numerous points within Manhattan. However, a lot of them seem to have the same location for pickup and dropoff. Which can actually happened with a direct annulation!
+
+**We will add a new variable : the distance**. Thus, we will remove all the trips with a distance of 0 (or very close to it) in the next part of our inspection
+
+### I.4.c Trip distance
+
+From the coordinates of the pickup and dropoff points we can calculate the direct distance between the two points. These values correspond to the minimum possible travel distance.
+
+The **distHaversine from geosphere** package gives the shortest distance between two points. This method assumes a spherical earth, ignoring ellipsoidal effects. The distance in by default in meters.
+
+```{r results="hide"}
+pickups = cabs %>% select(pickup_longitude,pickup_latitude) # isolate pickups long and lat
+dropoffs =  cabs %>% select(dropoff_longitude,dropoff_latitude) # isolate dropoffs long and lat
+
+cabs$distance <- distCosine(pickups, dropoffs) # add it to the data
+```
+
+Let's check distance trips :
+
+```{r}
+summary(cabs$distance)
+```
+
+```{r message=FALSE, warning=FALSE}
+cabs %>%
+  ggplot(aes(distance)) +
+  geom_histogram(fill = "blue", bins = 200) + xlab('distance in meters') +
+  scale_x_log10() +
+  scale_y_sqrt()
+```
+
+We can see that 50% of the trips had a distance less than +2km. Probably most of them are within Manhattan. 75% of them had a distance of less than 3.9km. We see 2 peaks of distance above 10kms, probably trips from or to JFK airport.
+
+We will check the extreme values.
+
+#### Very short distance trips investigation
+
+We see strange trips with very short distance (less than 100m for instance).
+
+```{r}
+cabs %>% filter(distance < 100) %>% head(10) # trips less than 100 meters
+```
+
+It's possible to ride a taxi for hundreds of meters. However some duration associated to short distance trips are strangely very high such as 33 minutes (~2000 s) for 44 meters is hardly possible (id0924324). Maybe there were a lot of traffic, but then you use Citymapper and take the underground! Even worse for no distance trip such as id0131920 who lasted +15 minutes (~1100)
+
+Thus, we will assume that taking a 3min ride for 500m is interesting and keep only short trips matching this features.
+
+```{r results="hide"}
+cabs = cabs %>% filter(distance > 0 | (distance < 500) & trip_duration < 180)
+```
+
+#### Long distances trips investigation
+
+Let's now check very long distance trips.
+
+```{r}
+cabs %>% arrange(desc(distance)) %>% head(10)
+```
+
+We can see that the highest distance is +45km which is totally feasible in taxi.
+
+Let's visualise the ones who had a distance above 10km.
+
+```{r}
+long_distance_trips <- cabs %>% filter(distance > 10*1000)
+long_distance_trips <- sample_n(long_distance_trips, 2000) # sample for visualisation and loading purpose
+
+long_distance_map = leaflet(data = long_distance_trips) %>% addProviderTiles(providers$CartoDB.Positron) %>%
+  addCircleMarkers(~ pickup_longitude, ~pickup_latitude, radius = 1,
+                   color = "green", fillOpacity = 0.3)%>%
+  addCircleMarkers(~ dropoff_longitude, ~dropoff_latitude, radius = 1,
+                   color = "orange", fillOpacity = 0.3)
+for(i in 1:nrow(long_distance_trips)){
+    long_distance_map <- addPolylines(long_distance_map, lat = as.numeric(long_distance_trips[i, c(7, 9)]), 
+                               lng = as.numeric(long_distance_trips[i, c(6, 8)]),
+                            color = "blue", weight = 2,opacity = 0.1)
+} # adding the connection between each pickup and dropoff
+long_distance_map
+```
+
+We can see that the vast majority of them are trips who started from the airport with dropoffs all over the NYC area. These are very likely to be real trips so we will keep them.
+
+#### I.4.d Passenger count
+
+In the summary we notice that some trips were with O passengers and up to 9. As we want to focus on popular trips, we remoove the ones with 0 passenger
+
+```{r results="hide"}
+cabs = cabs %>% filter(passenger_count != 0)
+```
+
+Let's now visualize those with at least 5 passengers. I though that yellow cabs had only 4 sits!
+Maybe they launch yellow vans, which would be interesting to investigate opportunites to launch a kind of ridesharing service ;)
+
+```{r message=FALSE, warning=FALSE}
+van_rides = cabs %>% filter(passenger_count == c(5,6,7,8,9))
+van_rides <- sample_n(van_rides,2000) # sample of around 10% for visualisation and loading purpose
+
+van_map = leaflet(data = van_rides) %>% addProviderTiles(providers$CartoDB.Positron) %>%
+  addCircleMarkers(~ pickup_longitude, ~pickup_latitude, radius = 1,
+                   color = "green", fillOpacity = 0.3)%>%
+  addCircleMarkers(~ dropoff_longitude, ~dropoff_latitude, radius = 1,
+                   color = "orange", fillOpacity = 0.3)
+for(i in 1:nrow(van_rides)){
+    van_map <- addPolylines(van_map, lat = as.numeric(van_rides[i, c(7, 9)]), 
+                               lng = as.numeric(van_rides[i, c(6, 8)]),
+                            color = "blue", weight = 2,opacity = 0.1)
+} # adding the connection between each pickup and dropoff
+van_map
+```
+
+Same kind of trips as the ones with long distance. We will keep them as they are probably real ones. Taxi Vans are operateing in NYC.
+
+## End of cleaning
+
+```{r}
+summary(cabs)
+```
+
+After cleaning, we have kept 1,453,516 which represents 99% of the data. The outliers were not that numerous, luckily for us!
+
+# II. Journey Trends & Cluster Analysis
+
+In this part we will analyse more in depth the trends of the trips. Then, we will make a cluster analysis to find the most popular areas for pickups/dropoffs as well as the most popular trips.
+
+## II.1 General trends 
+
+### II.1.a Pickup and Dropoff trends and analysis
+
+```{r}
+map <- sample_n(cabs, 7e3) # take around the half of the data for loading and visualization purpose
+
+#Title code
+tag.map.title <- tags$style(HTML("
+  .leaflet-control.map-title { 
+    transform: translate(-50%,20%);
+    position: fixed !important;
+    left: 50%;
+    text-align: center;
+    padding-left: 10px; 
+    padding-right: 10px; 
+    background: black;
+    font-weight: bold;
+    font-size: 28px;
+  }
+"))
+
+
+# Map of pickups
+leaflet(data = map) %>% addProviderTiles(providers$CartoDB.Positron) %>%
+  addCircleMarkers(~ pickup_longitude, ~pickup_latitude, radius = 1,
+                   color = "green", fillOpacity = 0.1) %>%
+  addControl(tags$div(tag.map.title, HTML("Pickups")) , position = "topleft", className="map-title")
+
+leaflet(data = map) %>% addProviderTiles(providers$CartoDB.Positron) %>%
+  addCircleMarkers(~ dropoff_longitude, ~dropoff_latitude, radius = 1,
+                   color = "orange", fillOpacity = 0.1) %>%
+  addControl(tags$div(tag.map.title, HTML("Dropoffs")) , position = "topleft", className="map-title")
+```
+
+The map with green points represents pickups locations. and the one with orange points represents dropoffs locations.
+
+We can see that :
+
+- Most of the trips started and ended in Manantthan
+
+- JFK Aiport is a popular spot
+
+- Pickup locations are very close to Manhattan, even when in Brooklyn
+
+- Dropoff locations are more spread over Brooklyn and in the North of Manatthan
+
+Now, let's have a look at the pickups of dropoffs trends over the period.
+
+```{r}
+cabs %>%
+  ggplot(aes(pickup_datetime)) +
+  geom_histogram(fill = "green", bins = 200) +
+  labs(x = "Date", y= "Count of pickups")
+
+cabs %>%
+  ggplot(aes(dropoff_datetime)) +
+  geom_histogram(fill = "orange", bins = 200) +
+  labs(x = "Date", y= "Count of dropoffs")
+```
+
+It's rather homogenous, with no trend from January to July or monthly seasonality. However weekly or daily seasonality is very likely to happen, we will investigate this after.
+
+*Note: We can notice a huge drop at the end of January / early February.It was winter in NYC, so maybe there was a lot of snow! We will investigate later in the III. part with the NYC weather dataset*
+
+Let's have a look at the pickups by month, day of the week and hour of the day.
+
+```{r}
+cabs %>%
+  mutate(month = month(pickup_datetime, label = TRUE)) %>% # creating week of the day value
+  group_by(month) %>%
+  count() %>%
+  ggplot(aes(month, n)) +
+  geom_point(size = 5, color = "blue") +
+  labs(x = "Month", y = "Total pickups")
+
+cabs %>%
+  mutate(weekday = wday(pickup_datetime, label = TRUE)) %>% # creating week of the day value
+  group_by(weekday) %>%
+  count() %>%
+  ggplot(aes(weekday, n)) +
+  geom_point(size = 5, color = "blue") +
+  labs(x = "Week day", y = "Total pickups")
+
+cabs %>%
+  mutate(pick_hour = hour(pickup_datetime)) %>% # creating hour of the day value
+  group_by(pick_hour) %>%
+  count() %>%
+  ggplot(aes(pick_hour, n)) +
+  geom_point(size = 5, color = "blue") +
+  labs(x = "Hour of the day", y = "Total pickups")
+```
+
+March was the busiest month and January the most calm. However the difference is not huge (from around 230k trips in January to 255k in March).
+
+We can clearly identify the trend over the week. Friday and Saturday are the busiest days of the week, whereas Monday is quite calm such as Sunday. The trend is increasing each day from Monday to Friday.
+
+Regarding the hours of the day, we see 3 mains momentums : at night which is quite calm, busy from 6am to 6pm and very busy at the end of the day from 7pm to 11pm.
+
+Let's add colors to see if these 3 momentus of pick-up hours are the same for each day of the week.
+
+```{r}
+cabs %>% mutate(pick_hour = hour(pickup_datetime),
+                weekday = factor(wday(pickup_datetime, label = TRUE))) %>%
+  group_by(pick_hour, weekday) %>% count() %>%
+  ggplot(aes(pick_hour, n, color = weekday)) +
+  geom_line(size = 2) +
+  labs(x = "Hour of the day", y = "count")
+```
+
+The trends are relatively the same of each day of the week, with Saturday and Sunday starting a bit later in the morning, of course. Friday and Saturday are keeping a high activity after 10pm, of course :)
+
+We see that the trip numbers are droping on Sunday and Monday at evening/night.
+
+### II.1.b Vendors competition
+
+Let's see how the activity is balanced between vendors by checking pickups by vendor.
+
+```{r}
+pal <- colorFactor(
+  palette = 'Set2',
+  domain = map$vendor_id)
+
+leaflet(data = map) %>% addProviderTiles(providers$CartoDB.Positron) %>%
+  addCircleMarkers(~pickup_longitude, ~pickup_latitude, radius = 1,
+                   color =~pal(vendor_id), fillOpacity = 0.8,
+                   label=~as.character(paste("vendor",vendor_id))) %>%
+  addControl(tags$div(tag.map.title, HTML("Pickups per vendor")) ,
+                                position = "topleft", className="map-title")
+```
+Both companies operated overall in the same areas.
+
+```{r}
+ggplot(cabs %>%
+  group_by(passenger_count,vendor_id) %>%
+  count()) +aes(x=passenger_count,n, fill = vendor_id)+ geom_col() + scale_y_sqrt() +scale_fill_brewer(palette="Set2")
+```
+*Note 1 : We scale the count of trips to balanced between each category.*
+*Note 2 : There was only one trip with 9 passenger and has been deleted in the cleaning.*
+
+We can see that :
+
+- the activity is well balanced between vendors for trips with 1 to 4 passengers
+
+- vendor 2 is dominating the +5 passengers business. Probably he has more vans!
+
+- 7 and 8 passengers are extremely rare. 
+
+Let's check the trip duration
+
+```{r message=FALSE, warning=FALSE}
+cabs %>% ggplot(aes(vendor_id,trip_duration, color = vendor_id)) + geom_boxplot() + scale_y_log10()
+  labs(y = "Trip duration") # we keep the value below 
+```
+
+The trip duration is quite the same of each vendor. It confirms they operates in the same areas.
+Thus, we will not take into account the type of vendor in our cluster analysis.
+
+### II.2 Cluster Analysis for popular pickup and dropoffs areas
+
+Now, we are trying to identify the popular areas of NYC. To do so, we will *apply a Kmeans model based on the pickups and dropoffs location*. The model will be applied on :
+
+*-* pickup longitude and latitude to determine popular pickups areas
+
+*-* dropoff longitude and latitude to determine popular dropoffs areas
+
+*-* both pickup & dropoff longitude/latitude to determine popular journeys.
+
+We will apply the model by first filtering the data to some of the most relevant trends we identify in our analysis above :
+
+*-* populars areas and journeys during working hours : *from Monday to Friday from 6am to 7pm*
+
+*-* popular areas and journeys during weekend high-activity : *from Friday 8pm to Sunday 5pm*
+
+*-* popular areas and journeys *for trips with at least 5 passengers* (interesting to know for companies looking to launch a van service / or ridesharing, such as Citymapper's one in London)
+
+In order for the model to be more accurate, we will now remove the extemes values in terms of duration. Thus, we remoove the trips who lasted more than 3 hours.
+
+```{r}
+cabs = cabs %>% filter(trip_duration < 3*3600)
+```
+
+The Kmeans model will assign each trip to a cluster. We will consider only the pickup and dropoff long/lat to establish these zones. Then, we will calculate for each cluster :
+
+*-* the average time of trip duration
+
+*-* the average number of passenger
+
+*-* the most hour of the day which is respresented and same for the day of the week.
+
+Thus we will add relevant insights after identifying which areas and journeys are the most popular.
+
+In order to improve the accurary of the cluster of trips, we first create some variables depending on the time trends we found in our analysis part.
+
+```{r results="hide"}
+
+pickup_cabs = cabs %>% mutate(p_date = date(pickup_datetime), # isolate date
+
+         p_weekday = wday(pickup_datetime, label = TRUE), # isolate the weekday
+
+         p_hour = hour(pickup_datetime), # isolate hours of the date
+
+         work = (p_hour %in% seq(6,19)) & (p_weekday %in% c("Mon","Tues","Wed","Thurs","Fri")), # adding working and days hours as they have a special seasonality compare to the weekend just below
+        weekend = ((p_hour %in% seq(20,23) & p_weekday %in% "Fri")
+           | (p_weekday %in% "Sat")
+           | (p_hour %in% seq(0,17) & (p_weekday %in% "Sun"))))
+
+dropoff_cabs = cabs %>% mutate(d_date = date(dropoff_datetime), # isolate date
+
+         d_weekday = wday(dropoff_datetime, label = TRUE), # isolate the weekday
+
+         d_hour = hour(dropoff_datetime), # isolate hours of the date
+
+         work = (d_hour %in% seq(6,19)) & (d_weekday %in% c("Mon","Tues","Wed","Thurs","Fri")), # adding working and days hours as they have a special seasonality compare to the weekend just below
+        weekend = ((d_hour %in% seq(20,23) & d_weekday %in% "Fri")
+           | (d_weekday %in% "Sat")
+           | (d_hour %in% seq(0,17) & (d_weekday %in% "Sun"))))
+
+```
+*Note: We consider the pickup_datetime as the reference for date, weekday and hour of the trips for pickups and same for dropoffs*
+
+
+### II.2.a Working hours popular areas and journeys
+
+#### Popular areas clustering - working hours
+
+```{r results="hide"}
+#Data with values on working hours for pickups
+p_cabs_WORK = pickup_cabs %>% filter(work==TRUE)
+
+#Data with values on working hours for dropoffs
+d_cabs_WORK = dropoff_cabs %>% filter(work==TRUE)
+```
+
+```{r warning=FALSE}
+# selecting the long/lat of pickup locations on working hours
+# Applying the kmeans with 6 clusters
+p_clusters_WORK <- kmeans(p_cabs_WORK %>%
+                       select(pickup_longitude,pickup_latitude), 6)
+
+# selecting the long/lat of dropoff locations on working hours
+# Applying the kmeans with 6 clusters
+d_clusters_WORK <- kmeans(d_cabs_WORK %>%
+                        select(dropoff_longitude,dropoff_latitude), 6)
+```
+
+```{r}
+p_cabs_WORK$cluster <- as.factor(p_clusters_WORK$cluster) # add the column value of pickup cluster
+d_cabs_WORK$cluster <- as.factor(d_clusters_WORK$cluster) # add the column value of dropoff cluster
+```
+
+Now, we will calculate for each cluster :
+
+*-* the centroid location (with the mean of lon and lat)
+
+*-* the mean number of passenger(s)
+
+*-* the average duration trip
+
+*-* the average distance trip
+
+*-* the most common hour
+
+*-* the most common day of the week.
+
+
+```{r}
+# Summarise the data with the value we want
+
+# For pickups
+p_cabs_WORK = p_cabs_WORK %>% group_by(cluster) %>%
+  summarise(nb_trips=n(), lat = mean(pickup_latitude),lon = mean(pickup_longitude),
+            ave_passenger = round(mean(as.numeric(passenger_count),1)),
+            ave_duration = round(mean(trip_duration/60),1), # put in minutes
+            ave_distance = round((mean(distance/1000)),1), # in kms
+            most_hour = names(which.max(table(p_hour))),
+            most_day = names(which.max(table(p_weekday))))
+
+# For dropoffs
+d_cabs_WORK = d_cabs_WORK %>% group_by(cluster) %>%
+  summarise(nb_trips=n(), lat = mean(dropoff_latitude), lon = mean(dropoff_longitude),
+            ave_passenger = round(mean(as.numeric(passenger_count),1)),
+            ave_duration = round(mean(trip_duration/60),1), # put in minutes
+            ave_distance = round((mean(distance/1000)),1), # in kms
+            most_hour = names(which.max(table(d_hour))),
+            most_day = names(which.max(table(d_weekday))))
+```
+
+
+```{r}
+# creating the labels
+labs1 <- lapply(seq(nrow(p_cabs_WORK)), function(i) {
+  paste0( '<p>',"Cluster #", p_cabs_WORK[i, "cluster"], '<p></p>',
+          "Most common day: ",p_cabs_WORK[i, "most_day"], '<p></p>', 
+          "Most common hour: ", p_cabs_WORK[i, "most_hour"],'</p><p>', 
+          "Average # passengers: ",p_cabs_WORK[i, "ave_passenger"], '<p></p>', 
+          "Average duration (min): ", p_cabs_WORK[i, "ave_duration"],'</p><p>', 
+          "Average distance (kms): ",p_cabs_WORK[i, "ave_distance"], '</p>' ) 
+})
+
+work_pickups_map = leaflet(data = p_cabs_WORK) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addCircleMarkers(~ lon, ~lat, radius =(~nb_trips/4e3), # size of the radius according the numbers of trips in the cluster
+                     color = "green", fillOpacity = 0.5,
+                     label = lapply(labs1, htmltools::HTML))
+work_pickups_map
+```
+**Note: the size of the circles depends on the number of trips within each cluster**
+
+*Tip: put your mouse on a circle to have relevant information about the cluster!*
+
+```{r}
+#Mapping dropoffs locations
+
+labs2 <- lapply(seq(nrow(d_cabs_WORK)), function(i) {
+  paste0( '<p>',"Cluster #", d_cabs_WORK[i, "cluster"], '<p></p>',
+          "Most common day: ",d_cabs_WORK[i, "most_day"], '<p></p>', 
+          "Most common hour: ", d_cabs_WORK[i, "most_hour"],'</p><p>', 
+          "Average # passengers: ",d_cabs_WORK[i, "ave_passenger"], '<p></p>', 
+          "Average duration (min): ", d_cabs_WORK[i, "ave_duration"],'</p><p>', 
+          "Average distance (kms): ",d_cabs_WORK[i, "ave_distance"], '</p>' ) 
+})
+
+work_dropoffs_map = leaflet(data = d_cabs_WORK) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addCircleMarkers(~ lon, ~lat, radius =(~nb_trips/4e3), # size of the radius according the numbers of trips in the cluster
+                     color = "orange", fillOpacity = 0.5,
+                     label = lapply(labs2, htmltools::HTML))
+work_dropoffs_map
+```
+**Note: the size of the circles depends on the number of trips within each cluster**
+
+*Tip: put your mouse on a circle to have relevant information about the cluster!*
+
+We can see that the most popular pickups and dropoffs areas are within Manhattan, especially from Central Park to Midtown. Pickups area are more contrated around Midtown wherase Dropoffs are more spread all allong Midtown to Central Park, with 2 small hotspots in Brooklyn.
+
+JFK & LaGuardia airports are populars hot spots but still much less than Manhattan ones.
+
+Theses are the areas to drive around when you are a taxi driver on working hours time!
+
+##### Popular journeys clustering - working hours
+
+For this clustering, we will take into account both pickups and dropoffs location for each trip in order to identify similar journeys.
+
+Thus, we create a journeys_cabs table with the same new time variables as for the areas clustering. We consider the pickup_time value for the time of the journey.
+
+```{r warning=FALSE, results="hide"}
+# creating the journeys data with time variables
+journey_cabs = cabs %>% mutate(date = date(pickup_datetime), # isolate date
+
+         weekday = wday(pickup_datetime, label = TRUE), # isolate the weekday
+
+         hour = hour(pickup_datetime), # isolate hours of the date
+
+         work = (hour %in% seq(6,19)) & (weekday %in% c("Mon","Tues","Wed","Thurs","Fri")), # adding working and days hours as they have a special seasonality compare to the weekend just below
+        weekend = ((hour %in% seq(20,23) & weekday %in% "Fri")
+           | (weekday %in% "Sat")
+           | (hour %in% seq(0,17) & (weekday %in% "Sun"))))
+
+# creating data of journeys during working hours
+journey_cabs_WORK = journey_cabs %>% filter(work==TRUE)
+
+# Applying the kmeans with 10 clusters
+journey_clusters_WORK <- kmeans(journey_cabs_WORK %>%
+                              select(pickup_longitude,pickup_latitude,
+                               dropoff_longitude,dropoff_latitude), 10)
+```
+
+
+```{r}
+# Adding cluster values to the data journeys working hours
+journey_cabs_WORK$cluster <- as.factor(journey_clusters_WORK$cluster)
+```
+
+
+```{r}
+# Adding the relevant values for the journey
+journey_cabs_WORK = journey_cabs_WORK %>% group_by(cluster) %>%
+  summarise(nb_trips=n(),
+            lat1 = mean(pickup_latitude),lon1 = mean(pickup_longitude),
+            lat2 = mean(dropoff_latitude),lon2 = mean(dropoff_longitude),
+            tot_passenger = sum(as.numeric(passenger_count)),
+            ave_passenger = round(mean(as.numeric(passenger_count),1)),
+            ave_duration = round(mean(trip_duration/60),1), # put in minutes
+            ave_distance = round((mean(distance/1000)),1), # in kms
+            most_hour = names(which.max(table(hour))),
+            most_day = names(which.max(table(weekday))))
+
+```
+
+
+```{r}
+# creating the hover labels
+labs3 <- lapply(seq(nrow(journey_cabs_WORK)), function(i) {
+  paste0( '<p>',"Cluster #", journey_cabs_WORK[i, "cluster"], '<p></p>',
+          "Most common day: ",journey_cabs_WORK[i, "most_day"], '<p></p>', 
+          "Most common hour: ", journey_cabs_WORK[i, "most_hour"],'</p><p>', 
+          "Average # passengers: ",journey_cabs_WORK[i, "ave_passenger"], '<p></p>', 
+          "Average duration (min): ", journey_cabs_WORK[i, "ave_duration"],'</p><p>', 
+          "Average distance (kms): ",journey_cabs_WORK[i, "ave_distance"], '</p>' ) 
+})
+
+journey_map_WORK = leaflet(data = journey_cabs_WORK) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addCircleMarkers(~ lon1, ~lat1, radius = ~tot_passenger/15e3,
+                   color = "green", fillOpacity = 0.3, label = lapply(labs3, htmltools::HTML)) %>%
+  addCircleMarkers(~ lon2, ~lat2, radius = ~tot_passenger/15e3,
+                   color = "orange", fillOpacity = 0.3, label = lapply(labs3, htmltools::HTML))
+for(i in 1:nrow(journey_cabs_WORK)){
+    journey_map_WORK <- addPolylines(journey_map_WORK,
+                                     lat = as.numeric(journey_cabs_WORK[i, c(3, 5)]), 
+                                     lng = as.numeric(journey_cabs_WORK[i, c(4, 6)]),
+                                     color = "blue",
+                                     weight =(as.numeric(journey_cabs_WORK[i, 2])/12e3),
+                                     # size of connection regarding number of trips in cluster
+                                     opacity = 0.5)
+}
+journey_map_WORK
+```
+*Note1 : the bigger the connection is between points, the highest number of trips there is. The size of the circle represents the total number of passengers.*
+
+*Note2 : over the circle to have relevant information on the cluster.*
+
+The most popular journey are definetely in Manhattan during working hours. We can also see the journeys from/to the JFK and LaGuardia airports.
+
+### II.2.a Weekend hours popular areas and journeys
+
+#### Popular areas clustering (weekend hours)
+Now, we will build the popular areas during weekend!
+
+```{r warning=FALSE, results="hide"}
+#Data with values on weekend hours for pickups
+p_cabs_WKD = pickup_cabs %>% filter(weekend==TRUE)
+
+#Data with values on weekend hours for dropoffs
+d_cabs_WKD = dropoff_cabs %>% filter(weekend==TRUE)
+
+# selecting the long/lat of pickup locations on weekend hours
+# Applying the kmeans with 6 clusters
+p_clusters_WKD <- kmeans(p_cabs_WKD %>%
+                           select(pickup_longitude,pickup_latitude), 6)
+
+# selecting the long/lat of dropoff locations on weekend hours
+# Applying the kmeans with 6 clusters
+d_clusters_WKD <- kmeans(d_cabs_WKD %>%
+                        select(dropoff_longitude,dropoff_latitude), 6) 
+```
+
+```{r results="hide"}
+p_cabs_WKD$cluster <- as.factor(p_clusters_WKD$cluster) # add the column value of pickup cluster
+d_cabs_WKD$cluster <- as.factor(d_clusters_WKD$cluster) # add the column value of dropoff cluster
+```
+
+
+```{r results="hide"}
+# Summarise the data with the value we want
+
+# For pickups
+p_cabs_WKD = p_cabs_WKD %>% group_by(cluster) %>%
+  summarise(nb_trips=n(), lat = mean(pickup_latitude),lon = mean(pickup_longitude),
+            ave_passenger = round(mean(as.numeric(passenger_count),1)),
+            ave_duration = round(mean(trip_duration/60),1), # put in minutes
+            ave_distance = round((mean(distance/1000)),1), # in kms
+            most_hour = names(which.max(table(p_hour))),
+            most_day = names(which.max(table(p_weekday))))
+
+# For dropoffs
+d_cabs_WKD = d_cabs_WKD %>% group_by(cluster) %>%
+  summarise(nb_trips=n(), lat = mean(dropoff_latitude), lon = mean(dropoff_longitude),
+            ave_passenger = round(mean(as.numeric(passenger_count),1)),
+            ave_duration = round(mean(trip_duration/60),1), # put in minutes
+            ave_distance = round((mean(distance/1000)),1), # in kms
+            most_hour = names(which.max(table(d_hour))),
+            most_day = names(which.max(table(d_weekday))))
+```
+
+
+```{r}
+# creating the labels
+labs4 <- lapply(seq(nrow(p_cabs_WKD)), function(i) {
+  paste0( '<p>',"Cluster #", p_cabs_WKD[i, "cluster"], '<p></p>',
+          "Most common day: ",p_cabs_WKD[i, "most_day"], '<p></p>', 
+          "Most common hour: ", p_cabs_WKD[i, "most_hour"],'</p><p>', 
+          "Average # passengers: ",p_cabs_WKD[i, "ave_passenger"], '<p></p>', 
+          "Average duration (min): ", p_cabs_WKD[i, "ave_duration"],'</p><p>', 
+          "Average distance (kms): ",p_cabs_WKD[i, "ave_distance"], '</p>' ) 
+})
+
+wkd_pickups_map = leaflet(data = p_cabs_WKD) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addCircleMarkers(~ lon, ~lat, radius =(~nb_trips/4000), # size of the radius according the numbers of trips in the cluster
+                     color = "green", fillOpacity = 0.5,
+                     label = lapply(labs4, htmltools::HTML))
+wkd_pickups_map
+```
+
+```{r}
+# creating the labels
+labs5 <- lapply(seq(nrow(d_cabs_WKD)), function(i) {
+  paste0( '<p>',"Cluster #", d_cabs_WKD[i, "cluster"], '<p></p>',
+          "Most common day: ",d_cabs_WKD[i, "most_day"], '<p></p>', 
+          "Most common hour: ", d_cabs_WKD[i, "most_hour"],'</p><p>', 
+          "Average # passengers: ",d_cabs_WKD[i, "ave_passenger"], '<p></p>', 
+          "Average duration (min): ", d_cabs_WKD[i, "ave_duration"],'</p><p>', 
+          "Average distance (kms): ",d_cabs_WKD[i, "ave_distance"], '</p>' ) 
+})
+
+wkd_dropoffs_map = leaflet(data = d_cabs_WKD) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addCircleMarkers(~ lon, ~lat, radius =(~nb_trips/4000), # size of the radius according the numbers of trips in the cluster
+                     color = "orange", fillOpacity = 0.5,
+                     label = lapply(labs5, htmltools::HTML))
+wkd_dropoffs_map
+```
+
+Similar pickups areas as during working hours but it's more spread along the Manhattan island. New dropoffs areas hotspots in Brooklyn!
+
+##### Popular journeys clustering (weekend hours)
+
+```{r results="hide"}
+# creating data of journeys during weekend hours
+journey_cabs_WKD = journey_cabs %>% filter(work==TRUE)
+
+# Applying the kmeans with 10 clusters
+journey_clusters_WKD <- kmeans(journey_cabs_WKD %>%
+                              select(pickup_longitude,pickup_latitude,
+                               dropoff_longitude,dropoff_latitude), 10)
+```
+
+```{r results="hide"}
+# Adding cluster values to the data journeys weekend hours
+journey_cabs_WKD$cluster <- as.factor(journey_clusters_WKD$cluster)
+```
+
+```{r results="hide"}
+# Adding the relevant values for the journey
+journey_cabs_WKD = journey_cabs_WKD %>% group_by(cluster) %>%
+  summarise(nb_trips=n(),
+            lat1 = mean(pickup_latitude),lon1 = mean(pickup_longitude),
+            lat2 = mean(dropoff_latitude),lon2 = mean(dropoff_longitude),
+            tot_passenger = sum(as.numeric(passenger_count)),
+            ave_passenger = round(mean(as.numeric(passenger_count),1)),
+            ave_duration = round(mean(trip_duration/60),1), # put in minutes
+            ave_distance = round((mean(distance/1000)),1), # in kms
+            most_hour = names(which.max(table(hour))),
+            most_day = names(which.max(table(weekday))))
+
+```
+
+```{r}
+# creating the hover labels
+labs6 <- lapply(seq(nrow(journey_cabs_WKD)), function(i) {
+  paste0( '<p>',"Cluster #", journey_cabs_WKD[i, "cluster"], '<p></p>',
+          "Most common day: ",journey_cabs_WKD[i, "most_day"], '<p></p>', 
+          "Most common hour: ", journey_cabs_WKD[i, "most_hour"],'</p><p>', 
+          "Average # passengers: ",journey_cabs_WKD[i, "ave_passenger"], '<p></p>', 
+          "Average duration (min): ", journey_cabs_WKD[i, "ave_duration"],'</p><p>', 
+          "Average distance (kms): ",journey_cabs_WKD[i, "ave_distance"], '</p>' ) 
+})
+
+# the map
+journey_map_WKD = leaflet(data = journey_cabs_WKD) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addCircleMarkers(~ lon1, ~lat1, radius = ~tot_passenger/15e3,
+                   color = "green", fillOpacity = 0.3, label = lapply(labs6, htmltools::HTML)) %>%
+  addCircleMarkers(~ lon2, ~lat2, radius = ~tot_passenger/15e3,
+                   color = "orange", fillOpacity = 0.3, label = lapply(labs6, htmltools::HTML))
+for(i in 1:nrow(journey_cabs_WKD)){
+    journey_map_WKD <- addPolylines(journey_map_WKD,
+                                     lat = as.numeric(journey_cabs_WKD[i, c(3, 5)]), 
+                                     lng = as.numeric(journey_cabs_WKD[i, c(4, 6)]),
+                                     color = "blue",
+                                     weight =(as.numeric(journey_cabs_WKD[i, 2])/12000),
+                                     # size of connection regarding number of trips in cluster
+                                     opacity = 0.5)
+}
+journey_map_WKD
+```
+
+Manhattan is still dominating the activity.
+
+The overall activity is quite similar to the working hours. However, we have less activity around the airports because there are 'only' pickups whereas there were dropoffs during working hours.
+
+#### II.2.c Van rides popular journeys
+
+##### Popular journeys - van rides
+For van we will take all the trips with at least 5 people, regardless of the time. We will go directly for the journey clustering.
+
+
+```{r results="hide"}
+# selecting the journeys with at least 5 passenger
+van_rides = journey_cabs %>% filter(passenger_count %in% seq(5,8))
+
+# Applying the kmeans with 4 clusters
+van_clusters <- kmeans(van_rides %>%
+                       select(pickup_longitude,pickup_latitude,
+                              dropoff_longitude,dropoff_latitude), 5)
+```
+
+```{r results="hide"}
+van_rides$cluster <- as.factor(van_clusters$cluster) # add the column value of journey cluster
+```
+
+
+```{r results="hide"}
+# Summarise the data with the value we want
+van_rides = van_rides %>% group_by(cluster) %>%
+  summarise(nb_trips=n(),
+            lat1 = mean(pickup_latitude),lon1 = mean(pickup_longitude),
+            lat2 = mean(dropoff_latitude),lon2 = mean(dropoff_longitude),
+            ave_passenger = round(mean(as.numeric(passenger_count),1)),
+            passenger_count = sum(as.numeric(passenger_count)),
+            ave_duration = round(mean(trip_duration/60),1), # put in minutes
+            ave_distance = round((mean(distance/1000)),1), # in kms
+            most_hour = names(which.max(table(hour))),
+            most_day = names(which.max(table(weekday))))
+```
+
+
+```{r}
+# creating the hover labels
+labs7 <- lapply(seq(nrow(van_rides)), function(i) {
+  paste0( '<p>',"Cluster #", van_rides[i, "cluster"], '<p></p>',
+          "Most common day: ",van_rides[i, "most_day"], '<p></p>', 
+          "Most common hour: ", van_rides[i, "most_hour"],'</p><p>', 
+          "Average # passengers: ",van_rides[i, "ave_passenger"], '<p></p>', 
+          "Average duration (min): ", van_rides[i, "ave_duration"],'</p><p>', 
+          "Average distance (kms): ",van_rides[i, "ave_distance"], '</p>' ) 
+})
+
+# creating the map
+van_map = leaflet(data = van_rides) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addCircleMarkers(~ lon1, ~lat1, radius = ~passenger_count/2e4,
+                   color = "green", fillOpacity = 1, label = lapply(labs7, htmltools::HTML)) %>%
+  addCircleMarkers(~ lon2, ~lat2, radius = ~passenger_count/2e4,
+                   color = "orange", fillOpacity = 1, label = lapply(labs7, htmltools::HTML))
+for(i in 1:nrow(van_rides)){
+    van_map <- addPolylines(van_map,
+                                     lat = as.numeric(van_rides[i, c(3, 5)]), 
+                                     lng = as.numeric(van_rides[i, c(4, 6)]),
+                                     color = "blue",
+                                     weight =(as.numeric(van_rides[i, 2])/1e4),
+                                     # size of connection regarding number of trips in cluster
+                                     opacity = 1)
+}
+
+van_map
+```
+**Note: the size of the circle depend on the total number of passenger and the size of the connection to the total number of trips.**
+
+5 main journeys identify for trips with at least 5 passenger. Manattan - Brooklyn is quite a hot journey, with the island still dominating from Midtown to Central Park.
+
+These would be interesting areas and journeys to focus if you want to launch a service for more than 5 people.
+
+
+# III. Adding data weather to explain outliers
+
+## III.a Weather Data inspection
+
+```{r message=FALSE, warning=FALSE, results="hide"}
+weather <- read_csv("weather_data_nyc_centralpark_2016.csv") # read the data
+
+# reformating date, Fahrenheit in Celsius and factor values for precipitation and snow
+weather <- weather %>%
+  mutate(date = as.Date(weather$date,format="%d-%m-%y"),
+         `maximum temperature` = fahrenheit.to.celsius(`maximum temperature`),
+         `minimum temperature` = fahrenheit.to.celsius(`minimum temperature`),
+         `average temperature` = fahrenheit.to.celsius(`average temperature`),
+         rain = as.numeric(ifelse(precipitation == "T", "0.01", precipitation)), # give the numeric value of 0.01 if therese was a trace, the minimum recorded is 0.1 so it has to be below!
+         snow_fall = as.numeric(ifelse(`snow fall` == "T", "0.01", `snow fall`)),
+         snow_depth = as.numeric(ifelse(`snow depth` == "T", "0.01", `snow depth`)))
+weather = weather %>% filter(date < '2016-07-01') #keeping only the value of our period in cabs
+
+```
+
+
+```{r}
+head(weather)
+summary(weather)
+```
+
+## III.b Explain outliers with weather data
+
+In the inspection part, we saw a drop at the end of January and at the end of May. Let's see if we can explain it with the weather data.
+
+We will calculate using the cabs dataset the total number of rides, passengers, kms driven and time duration for each day. Then we will merge it with the weather conditions to find correlations.
+
+```{r}
+cabs_weather = cabs %>% mutate(date = date(pickup_datetime)) %>% group_by(date) %>%
+  summarise(tot_rides=n(),tot_passenger=sum(as.numeric(passenger_count)),
+            tot_kms=(sum(distance)/1000),
+            tot_hours_duration =(sum(trip_duration)/3600)) # converting values intelligble way
+cabs_weather = left_join(cabs_weather,weather,by="date") # merging on date
+head(cabs_weather)
+```
+
+Let's visualise the number of rides with weather conditions
+
+```{r}
+ggplot(cabs_weather, aes(date)) + 
+  geom_line(aes(y = snow_fall, color = "snow fall"),size=1) + 
+  geom_line(aes(y = snow_depth, color = "snow depth"),size=1) +
+  labs(x = "Date", y = "Inches") + scale_x_date(limits = ymd(c("2016-01-01", "2016-06-30")))
+
+ggplot(cabs_weather, aes(date)) + 
+  geom_line(aes(y = `average temperature`, color = "average temperature"),size=1) + 
+  geom_line(aes(y = `maximum temperature`, color = "maximum temperature"),size=1) +
+  geom_line(aes(y = `minimum temperature`, color = "minimum temperature"),size=1) +
+  labs(x = "Date", y = "Tempeature in Celcius") + scale_x_date(limits = ymd(c("2016-01-20", "2016-02-08")))
+
+ggplot(cabs_weather, aes(date)) + 
+  geom_line(aes(y = tot_rides),size=1, color = "blue") +
+  labs(x = "Date", y = "Number of rides") + scale_x_date(limits = ymd(c("2016-01-01", "2016-06-30")))
+
+```
+
+The drop in trip volume matches with biggest snow fall of the period in NYC on January 23rd.
+By making a quick research, I found there was a huge blizzard in NYC, being a record-breaking snowfall.
+
+The snowfall on the 5th February did not impacted as much the rides. We can see that the average temperature was at 0 degrees with a maximum up to 6 degrees, so it might has melt quickly! (on the 23rd January even the maximum temperature was below 0 degrees).
+
+Regarding the second largest drop, it happened on the 30th May which was the Memorial Day in USA. It was a Monday and people were in majority not working, which can explains the drop.
+
+
+Thanks a lot for reading - I would be happy to present you my results into more details!
+
+**Eddy OHAYON**
