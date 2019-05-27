@@ -12,5 +12,5 @@ Data science challenge from Kaggle on NYC yellow cabs dataset
 ### HTML document
 https://htmlpreview.github.io/?https://github.com/Eddoha55/NYC-Taxi-Kaggle/blob/master/NYC_-_DS.html
 
-*The leaflet map won't display with the github htmlpreview, feel free to ask me for the oringal file!*
+*The leaflet map won't display with the github htmlpreview, feel free to ask me for the original file!*
 
